@@ -1,0 +1,13 @@
+{
+  "scriptId": "your-script-id-here",
+  "rootDir": "src",
+  "filePushOrder": [
+    "appsscript.json",
+    "config.js",
+    "logging.js",
+    "ui.js",
+    "triggers.js",
+    "labelling.js",
+    "sync.js"
+  ]
+}
