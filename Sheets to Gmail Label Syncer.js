@@ -1,9 +1,9 @@
 /**
  * Gmail Label Manager
- * 
+ *
  * This script synchronizes Gmail labels with a Google Sheet.
  * It handles creating, updating, and deleting labels based on changes to the sheet.
- * 
+ *
  * IMPORTANT SETUP:
  * 1. Rename your sheet to match the SHEET_NAME in the CONFIG (default is 'Labels')
  * 2. Ensure your columns match the exact order specified in CONFIG:
@@ -27,56 +27,184 @@ const CONFIG = {
 };
 
 /**
- * Creates the menu when the spreadsheet is opened
+ * SIMPLE TRIGGER (limited permissions)
+ * This runs automatically when the spreadsheet is opened,
+ * but with limited authorization capabilities
  */
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
-  ui.createMenu('Gmail Labels')
-    .addItem('Sync All Labels', 'syncAllLabels')
-    .addItem('Install Edit Trigger', 'installEditTrigger')
-    .addToUi();
-  
-  // Set up the label ID column
-  setupLabelIdColumn();
+
+  try {
+    // Set up the label ID column - this works with limited permissions
+    setupLabelIdColumn();
+
+    // Create a simple menu that shows options available with limited permissions
+    ui.createMenu('Gmail Labels')
+      .addItem('Click to Enable', 'promptForPermissions')
+      .addToUi();
+  } catch (error) {
+    console.error("Error in onOpen: " + error.message);
+  }
+}
+
+/**
+ * INSTALLABLE TRIGGER (full permissions)
+ * This runs only after the user has authorized the script
+ * and has full authorization capabilities
+ */
+function onOpenWithFullPermissions() {
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    // Check if edit trigger exists - requires full permissions
+    let editTriggerEnabled = false;
+    const triggers = ScriptApp.getProjectTriggers();
+    for (const trigger of triggers) {
+      if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
+        trigger.getHandlerFunction() === 'onEditTrigger') {
+        editTriggerEnabled = true;
+        break;
+      }
+    }
+
+    // Create a full menu with all options
+    const menu = ui.createMenu('Gmail Labels')
+      .addItem('Sync All Labels', 'syncAllLabels')
+      .addItem((editTriggerEnabled ? '[ON] ' : '[OFF] ') + 'Trigger On Row Change', 'toggleEditTrigger');
+
+    menu.addToUi();
+
+    logDebug("Full permissions menu created successfully");
+  } catch (error) {
+    console.error("Error in onOpenWithFullPermissions: " + error.message);
+  }
+}
+
+/**
+ * Prompts the user to enable advanced features and creates the installable trigger
+ */
+function promptForPermissions() {
+  const ui = SpreadsheetApp.getUi();
+
+  // Show a dialog with instructions
+  const response = ui.alert(
+    'Additional Permissions Required',
+    'To use all features of this script, you need to grant additional permissions.\n\n' +
+    'Would you like to enable these permissions now?',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response === ui.Button.OK) {
+    try {
+      // Create an installable trigger that will run with full permissions
+      createInstallableTrigger();
+
+      // Show success message
+      ui.alert(
+        'Success',
+        'Permissions have been requested. Please refresh the spreadsheet to see all options.',
+        ui.ButtonSet.OK
+      );
+
+      // Force run the full permissions function if we got here
+      try {
+        onOpenWithFullPermissions();
+      } catch (e) {
+        // This might fail if permissions aren't fully granted yet, which is expected
+        console.log("Could not run full permissions function yet: " + e.message);
+      }
+    } catch (e) {
+      // If direct enabling fails, show error
+      ui.alert(
+        'Error',
+        'Unable to enable permissions: ' + e.message + '\n\n' +
+        'Please try refreshing the page and trying again.',
+        ui.ButtonSet.OK
+      );
+    }
+  }
+}
+
+/**
+ * Creates the installable trigger for full permissions
+ */
+function createInstallableTrigger() {
+  try {
+    // Remove any existing triggers for the same function first
+    const triggers = ScriptApp.getProjectTriggers();
+    for (const trigger of triggers) {
+      if (trigger.getHandlerFunction() === 'onOpenWithFullPermissions') {
+        ScriptApp.deleteTrigger(trigger);
+      }
+    }
+
+    // Create a new installable trigger
+    ScriptApp.newTrigger('onOpenWithFullPermissions')
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onOpen()
+      .create();
+
+    console.log("Installable trigger created successfully");
+    return true;
+  } catch (error) {
+    console.error("Error creating installable trigger: " + error.message);
+    throw error;
+  }
 }
 
 /**
  * Sets up the hidden column for label IDs
  */
 function setupLabelIdColumn() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
-  
-  // Create header for ID column if needed
-  sheet.getRange(CONFIG.HEADER_ROW, CONFIG.LABEL_ID_COLUMN).setValue('Label ID');
-  
-  // Try to hide the column
   try {
-    sheet.hideColumns(CONFIG.LABEL_ID_COLUMN);
-    logDebug("Label ID column hidden successfully");
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
+    if (!sheet) {
+      // Sheet doesn't exist yet, don't proceed
+      return;
+    }
+
+    // Create header for ID column if needed
+    sheet.getRange(CONFIG.HEADER_ROW, CONFIG.LABEL_ID_COLUMN).setValue('Label ID');
+
+    // Try to hide the column
+    try {
+      sheet.hideColumns(CONFIG.LABEL_ID_COLUMN);
+      logDebug("Label ID column hidden successfully");
+    } catch (error) {
+      logError(`Failed to hide Label ID column: ${error.message}`);
+    }
   } catch (error) {
-    logError(`Failed to hide Label ID column: ${error.message}`);
+    // Skip setting up the column if there's an error
+    logError(`Error in setupLabelIdColumn: ${error.message}`);
   }
 }
 
-/**
- * Installs the edit trigger to monitor changes to the sheet
- */
-function installEditTrigger() {
-  // Delete any existing edit triggers first
+function toggleEditTrigger() {
+  // Check current status
   const triggers = ScriptApp.getProjectTriggers();
+  let triggerExists = false;
+
   for (const trigger of triggers) {
     if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
+      // Trigger exists, so delete it
       ScriptApp.deleteTrigger(trigger);
+      triggerExists = true;
     }
   }
-  
-  // Create new edit trigger
-  ScriptApp.newTrigger('onEditTrigger')
-    .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
-    .onEdit()
-    .create();
-  
-  SpreadsheetApp.getActive().toast('Edit trigger installed successfully');
+
+  // If trigger didn't exist, create it
+  if (!triggerExists) {
+    ScriptApp.newTrigger('onEditTrigger')
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onEdit()
+      .create();
+    SpreadsheetApp.getActive().toast('Row change trigger enabled');
+  } else {
+    SpreadsheetApp.getActive().toast('Row change trigger disabled');
+  }
+
+  // Refresh the menu
+  onOpenWithFullPermissions();
 }
 
 /**
@@ -87,23 +215,23 @@ function onEditTrigger(e) {
     // Get sheet, row, and column of edit
     const sheet = e.source.getActiveSheet();
     const sheetName = sheet.getName();
-    
+
     // Only process edits in our target sheet
     if (sheetName !== CONFIG.SHEET_NAME) return;
-    
+
     const row = e.range.getRow();
     const column = e.range.getColumn();
-    
+
     // Skip header row
     if (row <= CONFIG.HEADER_ROW) return;
-    
+
     // Only process changes to the name column
     if (column === CONFIG.NAME_COLUMN) {
       logDebug(`Change detected in Name column at row ${row}`);
-      
+
       const newLabelName = e.value || "";
       const oldLabelName = e.oldValue || "";
-      
+
       handleLabelChange(sheet, row, oldLabelName, newLabelName);
     }
   } catch (error) {
@@ -119,18 +247,18 @@ function getLabelMap() {
   try {
     // Use the Gmail Advanced Service to get all labels
     const response = Gmail.Users.Labels.list('me');
-    
+
     if (!response || !response.labels) {
       logError("No labels found in the Gmail account");
       return {};
     }
-    
+
     // Create a map of label name -> label ID
     const labelMap = {};
     for (const label of response.labels) {
       labelMap[label.name] = label.id;
     }
-    
+
     logDebug(`Found ${Object.keys(labelMap).length} Gmail labels`);
     return labelMap;
   } catch (error) {
@@ -154,7 +282,7 @@ function getLabelId(labelName) {
  */
 function handleLabelChange(sheet, row, oldLabelName, newLabelName) {
   logDebug(`Processing label change: "${oldLabelName}" -> "${newLabelName}"`);
-  
+
   // Determine the action based on the change
   if (oldLabelName === "" && newLabelName !== "") {
     // Create a new label
@@ -173,7 +301,7 @@ function handleLabelChange(sheet, row, oldLabelName, newLabelName) {
  */
 function createLabel(sheet, row, labelName) {
   logDebug(`Creating label: "${labelName}"`);
-  
+
   try {
     // Check if label already exists
     const existingId = getLabelId(labelName);
@@ -184,21 +312,21 @@ function createLabel(sheet, row, labelName) {
       SpreadsheetApp.getActive().toast(`Label "${labelName}" already exists in Gmail.`, 'Info', 3);
       return;
     }
-    
+
     // Check if this is a nested label and add parent labels to spreadsheet
     addParentLabelsToSheet(sheet, labelName);
-    
+
     // Create the label (now that all parents exist)
     GmailApp.createLabel(labelName);
-    
+
     // Get the ID of the newly created label
     const newLabelId = getLabelId(labelName);
-    
+
     if (newLabelId) {
       // Store the label ID in the hidden column
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(newLabelId);
       logDebug(`Label "${labelName}" created successfully with ID: ${newLabelId}`);
-      
+
       // Toast notification for new label
       SpreadsheetApp.getActive().toast(`New label "${labelName}" created in Gmail.`, 'Success', 3);
     } else {
@@ -216,28 +344,28 @@ function createLabel(sheet, row, labelName) {
  */
 function updateLabel(sheet, row, oldLabelName, newLabelName) {
   logDebug(`Updating label: "${oldLabelName}" -> "${newLabelName}"`);
-  
+
   try {
     // Get the ID of the old label
     const oldLabelId = getLabelId(oldLabelName);
-    
+
     // If old label not found, just create the new one
     if (!oldLabelId) {
       logDebug(`Old label "${oldLabelName}" not found, creating new label "${newLabelName}" instead`);
       createLabel(sheet, row, newLabelName);
       return;
     }
-    
+
     // Check if this is a nested label and add parent labels to spreadsheet
     addParentLabelsToSheet(sheet, newLabelName);
-    
+
     // Get all threads with the old label
     const threads = GmailApp.search(`label:${oldLabelName}`);
     logDebug(`Found ${threads.length} threads with label "${oldLabelName}"`);
-    
+
     // Create the new label
     GmailApp.createLabel(newLabelName);
-    
+
     // Get the ID of the new label
     const newLabelId = getLabelId(newLabelName);
     if (!newLabelId) {
@@ -245,44 +373,44 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
       SpreadsheetApp.getActive().toast(`Error updating label: couldn't create new label`, 'Error', 10);
       return;
     }
-    
+
     // Get the actual label objects
     const oldLabel = GmailApp.getUserLabelByName(oldLabelName);
     const newLabel = GmailApp.getUserLabelByName(newLabelName);
-    
+
     if (!oldLabel || !newLabel) {
       logError(`Failed to get label objects for "${oldLabelName}" or "${newLabelName}"`);
       return;
     }
-    
+
     // Process threads in batches
     const BATCH_SIZE = 100;
     for (let i = 0; i < threads.length; i += BATCH_SIZE) {
       const batch = threads.slice(i, i + BATCH_SIZE);
-      
+
       // Add the new label to threads
       if (batch.length > 0) {
         newLabel.addToThreads(batch);
       }
     }
-    
+
     // Remove the old label from threads in batches
     for (let i = 0; i < threads.length; i += BATCH_SIZE) {
       const batch = threads.slice(i, i + BATCH_SIZE);
-      
+
       if (batch.length > 0) {
         oldLabel.removeFromThreads(batch);
       }
     }
-    
+
     // Delete the old label
     oldLabel.deleteLabel();
-    
+
     // Update the label ID in the spreadsheet
     sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(newLabelId);
-    
+
     logDebug(`Label updated successfully from "${oldLabelName}" to "${newLabelName}"`);
-    
+
     // Toast notification for label rename
     SpreadsheetApp.getActive().toast(`The label "${oldLabelName}" has been renamed to "${newLabelName}" within Gmail.`, 'Success', 5);
   } catch (error) {
@@ -296,18 +424,18 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
  */
 function deleteLabel(sheet, row, labelName) {
   logDebug(`Attempting to delete label: "${labelName}"`);
-  
+
   try {
     // Get the label ID
     const labelId = getLabelId(labelName);
-    
+
     // If label doesn't exist, just clear the row and return
     if (!labelId) {
       logDebug(`Label "${labelName}" not found, nothing to delete`);
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
       return;
     }
-    
+
     // Get the label object
     const label = GmailApp.getUserLabelByName(labelName);
     if (!label) {
@@ -315,18 +443,18 @@ function deleteLabel(sheet, row, labelName) {
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
       return;
     }
-    
+
     // Check if any threads use this label
     const threads = GmailApp.search(`label:${labelName}`);
-    
+
     if (threads.length > 0) {
       // There are threads with this label, send notification
       const message = `Cannot delete label "${labelName}" as it still has ${threads.length} threads using it.`;
       logDebug(message);
-      
+
       // Show warning in spreadsheet
       SpreadsheetApp.getActive().toast(message, 'Warning', 10);
-      
+
       // Restore the label name in the spreadsheet
       sheet.getRange(row, CONFIG.NAME_COLUMN).setValue(labelName);
     } else {
@@ -334,7 +462,7 @@ function deleteLabel(sheet, row, labelName) {
       label.deleteLabel();
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
       logDebug(`Label "${labelName}" deleted successfully`);
-      
+
       // Toast notification for label deletion
       SpreadsheetApp.getActive().toast(`The label "${labelName}" has been deleted from Gmail.`, 'Info', 5);
     }
@@ -352,7 +480,7 @@ function addParentLabelsToSheet(sheet, labelName) {
   if (!labelName.includes('/')) {
     return;
   }
-  
+
   // Create a map of existing sheet labels to check for parents
   const sheetLabelMap = {};
   const lastRow = sheet.getLastRow();
@@ -362,19 +490,19 @@ function addParentLabelsToSheet(sheet, labelName) {
       sheetLabelMap[currentLabel] = r;
     }
   }
-  
+
   // Process the nested structure
   const parts = labelName.split('/');
   let parentPath = '';
   let parentsAdded = 0;
-  
+
   // Create each level of the hierarchy if needed
   for (let i = 0; i < parts.length - 1; i++) {
     if (parentPath) {
       parentPath += '/';
     }
     parentPath += parts[i];
-    
+
     // Create the parent label in Gmail if it doesn't exist
     const parentId = getLabelId(parentPath);
     if (!parentId) {
@@ -382,23 +510,23 @@ function addParentLabelsToSheet(sheet, labelName) {
       logDebug(`Created parent label "${parentPath}" in Gmail`);
       SpreadsheetApp.getActive().toast(`New parent label "${parentPath}" created in Gmail.`, 'Info', 3);
     }
-    
+
     // Add the parent label to the spreadsheet if it doesn't exist
     if (!sheetLabelMap[parentPath]) {
       // Append to the end of the sheet
       const newRow = lastRow + 1 + parentsAdded;
-      
+
       // Add the parent label to the new row
       sheet.getRange(newRow, CONFIG.NAME_COLUMN).setValue(parentPath);
-      
+
       // Get the parent label ID and add to hidden column
       const parentLabelId = getLabelId(parentPath);
       if (parentLabelId) {
         sheet.getRange(newRow, CONFIG.LABEL_ID_COLUMN).setValue(parentLabelId);
       }
-      
+
       logDebug(`Added parent label "${parentPath}" to spreadsheet at row ${newRow}`);
-      
+
       // Update the map to include the new parent
       sheetLabelMap[parentPath] = newRow;
       parentsAdded++;
@@ -412,10 +540,10 @@ function addParentLabelsToSheet(sheet, labelName) {
 function syncAllLabels() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
   let lastRow = sheet.getLastRow();
-  
+
   // Get existing label map from Gmail
   const labelMap = getLabelMap();
-  
+
   // Step 1: Create a map of all labels already in the spreadsheet
   const sheetLabelMap = {};
   for (let row = CONFIG.HEADER_ROW + 1; row <= lastRow; row++) {
@@ -424,29 +552,29 @@ function syncAllLabels() {
       sheetLabelMap[labelName] = row;
     }
   }
-  
+
   // Step 2: Process existing sheet labels
   for (const labelName in sheetLabelMap) {
     const row = sheetLabelMap[labelName];
-    
+
     try {
       // Check if label exists in Gmail
       const labelId = labelMap[labelName];
-      
+
       if (!labelId) {
         // This is a new label to create
         // For nested labels, ensure all parent labels exist first
         if (labelName.includes('/')) {
           const parts = labelName.split('/');
           let parentPath = '';
-          
+
           // Create each level of the hierarchy if needed
           for (let i = 0; i < parts.length - 1; i++) {
             if (parentPath) {
               parentPath += '/';
             }
             parentPath += parts[i];
-            
+
             // Create the parent label if it doesn't exist
             const parentId = labelMap[parentPath];
             if (!parentId) {
@@ -455,10 +583,10 @@ function syncAllLabels() {
             }
           }
         }
-        
+
         // Create the label (now that all parents exist if needed)
         GmailApp.createLabel(labelName);
-        
+
         // Get the new ID
         const newLabelId = getLabelId(labelName);
         if (newLabelId) {
@@ -474,23 +602,23 @@ function syncAllLabels() {
       logError(`Error syncing label "${labelName}": ${error.message}`);
     }
   }
-  
+
   // Step 3: Find Gmail labels not in the spreadsheet
   const response = Gmail.Users.Labels.list('me');
   if (response && response.labels) {
     for (const label of response.labels) {
       // Skip system labels (they start with "CATEGORY_" or have reserved names)
-      if (label.type === 'system' || 
-          label.name.startsWith('CATEGORY_') || 
-          ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM'].includes(label.name)) {
+      if (label.type === 'system' ||
+        label.name.startsWith('CATEGORY_') ||
+        ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM'].includes(label.name)) {
         continue;
       }
-      
+
       // Skip labels already in the spreadsheet
       if (sheetLabelMap[label.name]) {
         continue;
       }
-      
+
       // Add this label to the spreadsheet
       lastRow++;
       sheet.getRange(lastRow, CONFIG.LABEL_ID_COLUMN).setValue(label.id);
@@ -498,7 +626,7 @@ function syncAllLabels() {
       logDebug(`Added Gmail label "${label.name}" to spreadsheet`);
     }
   }
-  
+
   SpreadsheetApp.getActive().toast('All labels synced bidirectionally between Gmail and spreadsheet');
 }
 
