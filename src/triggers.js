@@ -1,7 +1,7 @@
 /**
  * triggers.js - Gmail Label Manager
  *
- * Contains functions related to installable triggers and event handling.
+ * Contains functions related to installable triggers, event handling, and settings.
  */
 
 /**
@@ -92,4 +92,22 @@ function onEditTrigger(e) {
   } catch (error) {
     logError(`Error in onEditTrigger: ${error.message}`);
   }
+}
+
+/**
+ * Gets the auto sync setting status
+ * @return {boolean} Whether auto sync is enabled
+ */
+function getAutoSyncEnabled() {
+  return PropertiesService.getUserProperties().getProperty('autoSyncEnabled') === 'true';
+}
+
+/**
+ * Toggles the auto sync setting on/off
+ */
+function toggleAutoSync() {
+  const enabled = !getAutoSyncEnabled();
+  PropertiesService.getUserProperties().setProperty('autoSyncEnabled', enabled.toString());
+  SpreadsheetApp.getActive().toast(`Auto Sync ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  onOpenWithFullPermissions(); // Refresh menu
 }

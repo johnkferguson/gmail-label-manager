@@ -6,10 +6,18 @@
 
 /**
  * Updates the bidirectional sync function to properly handle nested labels too
+ * @return {Object} Results of the sync operation for notifications
  */
 function syncAllLabels() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
   let lastRow = sheet.getLastRow();
+  
+  // Results object to track changes for notifications
+  const results = {
+    createdInGmail: [],
+    addedToSheet: [],
+    updatedIds: []
+  };
 
   // Get existing label map from Gmail
   const labelMap = getLabelMap();
@@ -56,6 +64,7 @@ function syncAllLabels() {
 
         // Create the label (now that all parents exist if needed)
         GmailApp.createLabel(labelName);
+        results.createdInGmail.push(labelName);
 
         // Get the new ID
         const newLabelId = getLabelId(labelName);
@@ -67,6 +76,7 @@ function syncAllLabels() {
         // Label exists, update the ID
         sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(labelId);
         logDebug(`Updated ID for existing label "${labelName}": ${labelId}`);
+        results.updatedIds.push(labelName);
       }
     } catch (error) {
       logError(`Error syncing label "${labelName}": ${error.message}`);
@@ -94,8 +104,16 @@ function syncAllLabels() {
       sheet.getRange(lastRow, CONFIG.LABEL_ID_COLUMN).setValue(label.id);
       sheet.getRange(lastRow, CONFIG.NAME_COLUMN).setValue(label.name);
       logDebug(`Added Gmail label "${label.name}" to spreadsheet`);
+      results.addedToSheet.push(label.name);
     }
   }
 
-  SpreadsheetApp.getActive().toast('All labels synced bidirectionally between Gmail and spreadsheet');
+  // If not called from auto sync, show a general toast
+  if (!getAutoSyncEnabled() || !ScriptApp.getProjectTriggers().some(trigger => 
+      trigger.getEventType() === ScriptApp.EventType.ON_OPEN && 
+      trigger.getHandlerFunction() === 'onOpenWithFullPermissions')) {
+    SpreadsheetApp.getActive().toast('All labels synced between Spreadsheet and Gmail.');
+  }
+  
+  return results;
 }
