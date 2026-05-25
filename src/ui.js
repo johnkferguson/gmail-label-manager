@@ -149,47 +149,35 @@ function setupLabelIdColumn() {
 }
 
 /**
- * Shows detailed toast notifications for sync results
- * @param {Object} results - The results from syncAllLabels operation
+ * Render a single multi-line toast summarizing a sync run.
+ *
+ * Previously this fired up to three sequential toasts with Utilities.sleep
+ * between them, hoping the sleeps would serialize the UI. They didn't —
+ * Sheets only shows one toast at a time and the second one just replaced
+ * the first. Net effect: a 1-second wall-clock delay and the user only saw
+ * the last message.
+ *
+ * One toast, formatted, no sleeps.
+ *
+ * @param {{ createdInGmail?: string[], addedToSheet?: string[] }} results
  */
 function showSyncResults(results) {
   const ss = SpreadsheetApp.getActive();
+  const created = results.createdInGmail ?? [];
+  const added = results.addedToSheet ?? [];
+  const total = created.length + added.length;
 
-  // Use a timeout approach to ensure toasts are displayed sequentially
-  // Start with a summary notification
-  const totalChanges =
-    (results.createdInGmail ? results.createdInGmail.length : 0) +
-    (results.addedToSheet ? results.addedToSheet.length : 0);
-
-  if (totalChanges > 0) {
-    ss.toast(`Auto Sync complete: ${totalChanges} label(s) synchronized`, "Auto Sync Complete", 5);
-
-    // Add a slight delay before showing detailed notifications
-    Utilities.sleep(500);
-
-    // Show notifications for labels created in Gmail
-    if (results.createdInGmail && results.createdInGmail.length > 0) {
-      const createdLabels = results.createdInGmail.join('", "');
-      ss.toast(
-        `Labels found in spreadsheet but not in Gmail: "${createdLabels}". These labels have been created in Gmail.`,
-        "Labels Created in Gmail",
-        5
-      );
-    }
-
-    // Add another slight delay
-    Utilities.sleep(500);
-
-    // Show notifications for labels added to spreadsheet
-    if (results.addedToSheet && results.addedToSheet.length > 0) {
-      const addedLabels = results.addedToSheet.join('", "');
-      ss.toast(
-        `Labels found in Gmail but not in spreadsheet: "${addedLabels}". These labels have been added to spreadsheet.`,
-        "Labels Added to Spreadsheet",
-        5
-      );
-    }
-  } else {
+  if (total === 0) {
     ss.toast("Auto Sync complete: No changes needed", "Auto Sync Complete", 3);
+    return;
   }
+
+  const lines = [`${total} label(s) synchronized.`];
+  if (created.length > 0) {
+    lines.push(`Created in Gmail: ${created.map((n) => `"${n}"`).join(", ")}`);
+  }
+  if (added.length > 0) {
+    lines.push(`Added to sheet: ${added.map((n) => `"${n}"`).join(", ")}`);
+  }
+  ss.toast(lines.join("\n"), "Auto Sync Complete", 8);
 }
