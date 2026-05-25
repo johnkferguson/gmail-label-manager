@@ -19,7 +19,7 @@ function onOpen() {
     // Create a simple menu that shows options available with limited permissions
     ui.createMenu("Gmail Labels").addItem("Click to Enable", "promptForPermissions").addToUi();
   } catch (error) {
-    console.error("Error in onOpen: " + error.message);
+    console.error(`Error in onOpen: ${error.message}`);
   }
 }
 
@@ -49,13 +49,10 @@ function onOpenWithFullPermissions() {
     const menu = ui
       .createMenu("Gmail Labels")
       .addItem(
-        (editTriggerEnabled ? "[ON] " : "[OFF] ") + "Trigger On Spreadsheet Change",
+        `${editTriggerEnabled ? "[ON] " : "[OFF] "}Trigger On Spreadsheet Change`,
         "toggleEditTrigger"
       )
-      .addItem(
-        (getAutoSyncEnabled() ? "[ON] " : "[OFF] ") + "Auto Sync On Startup",
-        "toggleAutoSync"
-      )
+      .addItem(`${getAutoSyncEnabled() ? "[ON] " : "[OFF] "}Auto Sync On Startup`, "toggleAutoSync")
       .addItem("Sync All Labels", "syncAllLabels");
 
     menu.addToUi();
@@ -66,14 +63,14 @@ function onOpenWithFullPermissions() {
         const results = syncAllLabels();
         showSyncResults(results);
       } catch (error) {
-        logError("Auto sync failed: " + error.message);
+        logError(`Auto sync failed: ${error.message}`);
         SpreadsheetApp.getActive().toast("Auto sync failed - check logs", "Error", 6);
       }
     }
 
     logDebug("Full permissions menu created successfully");
   } catch (error) {
-    console.error("Error in onOpenWithFullPermissions: " + error.message);
+    console.error(`Error in onOpenWithFullPermissions: ${error.message}`);
   }
 }
 
@@ -108,7 +105,7 @@ function promptForPermissions() {
         onOpenWithFullPermissions();
       } catch (e) {
         // This might fail if permissions aren't fully granted yet, which is expected
-        console.log("Could not run full permissions function yet: " + e.message);
+        console.log(`Could not run full permissions function yet: ${e.message}`);
       }
     } catch (e) {
       // If direct enabling fails, show error

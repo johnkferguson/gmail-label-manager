@@ -26,7 +26,7 @@ function createInstallableTrigger() {
     console.log("Installable trigger created successfully");
     return true;
   } catch (error) {
-    console.error("Error creating installable trigger: " + error.message);
+    console.error(`Error creating installable trigger: ${error.message}`);
     throw error;
   }
 }

@@ -1,32 +1,49 @@
 /**
- * labelling.js - Gmail Label Manager
+ * labelling.js — Gmail Label Manager
  *
- * Contains all label management functionality including core functions
- * and CRUD operations for Gmail labels.
+ * Label CRUD against Gmail, driven by sheet edits.
+ *
+ * Performance note: every public CRUD function accepts an optional pre-fetched
+ * `labelMap` (name → id). Callers operating on multiple labels in a single
+ * run (e.g. syncAllLabels) fetch the map once at the top and pass it through;
+ * single-label callers (e.g. the edit trigger) can omit it and a fresh one is
+ * fetched on demand. New labels created during a run are stitched into the
+ * passed-in map so subsequent calls in the same run see them.
+ *
+ * Where possible we use the Gmail Advanced Service's `Gmail.Users.Labels.create`
+ * directly — it returns the new label resource (with ID), eliminating the
+ * "create then re-fetch the whole list to find the new ID" round-trip that
+ * the earlier version did.
  */
 
 /**
- * Gets a mapping of all Gmail label names to their IDs
- * @return {Object} Map of label name -> label ID
+ * @typedef {Record<string, string>} LabelMap - Gmail label name → ID.
  */
-function getLabelMap() {
-  try {
-    // Use the Gmail Advanced Service to get all labels
-    const response = Gmail.Users.Labels.list("me");
 
-    if (!response || !response.labels) {
+/**
+ * Fetch a fresh name→id map of user-managed Gmail labels. One Gmail API call.
+ *
+ * System labels (INBOX, SENT, CATEGORY_*, etc.) are filtered out — they're
+ * never user-edited and never belong in the sheet.
+ *
+ * @returns {LabelMap}
+ */
+function fetchLabelMap() {
+  try {
+    // Gmail Advanced Service is enabled in the manifest; cast quiets tsc.
+    const response = /** @type {any} */ (Gmail).Users.Labels.list("me");
+    if (!response?.labels) {
       logError("No labels found in the Gmail account");
       return {};
     }
-
-    // Create a map of label name -> label ID
-    const labelMap = {};
+    /** @type {LabelMap} */
+    const map = {};
     for (const label of response.labels) {
-      labelMap[label.name] = label.id;
+      if (label.type === "system") continue;
+      if (label.name && label.id) map[label.name] = label.id;
     }
-
-    logDebug(`Found ${Object.keys(labelMap).length} Gmail labels`);
-    return labelMap;
+    logDebug(`Fetched ${Object.keys(map).length} user-managed Gmail labels`);
+    return map;
   } catch (error) {
     logError(`Error getting label map: ${error.message}`);
     return {};
@@ -34,66 +51,98 @@ function getLabelMap() {
 }
 
 /**
- * Gets the ID of a Gmail label by name
- * @param {string} labelName The name of the label
- * @return {string|null} The label ID or null if not found
+ * Backward-compat alias. Prefer fetchLabelMap + reuse for multi-label flows.
+ * @returns {LabelMap}
  */
-function getLabelId(labelName) {
-  const labelMap = getLabelMap();
-  return labelMap[labelName] || null;
+function getLabelMap() {
+  return fetchLabelMap();
 }
 
 /**
- * Processes label changes (create, update, delete)
+ * Backward-compat single-label lookup. Each call does a full label-list fetch
+ * — for batch operations, fetchLabelMap() once and index into the result.
+ *
+ * @param {string} labelName
+ * @returns {string | null}
  */
-function handleLabelChange(sheet, row, oldLabelName, newLabelName) {
-  logDebug(`Processing label change: "${oldLabelName}" -> "${newLabelName}"`);
+function getLabelId(labelName) {
+  return fetchLabelMap()[labelName] || null;
+}
 
-  // Determine the action based on the change
-  if (oldLabelName === "" && newLabelName !== "") {
-    // Create a new label
-    createLabel(sheet, row, newLabelName);
-  } else if (oldLabelName !== "" && newLabelName === "") {
-    // Delete a label
-    deleteLabel(sheet, row, oldLabelName);
-  } else if (oldLabelName !== "" && newLabelName !== "" && oldLabelName !== newLabelName) {
-    // Update a label
-    updateLabel(sheet, row, oldLabelName, newLabelName);
+/**
+ * Create a Gmail label via the Advanced Service and return its ID. If
+ * `labelMap` is provided, the new entry is stitched in so subsequent
+ * lookups in the same run see it.
+ *
+ * @param {string} labelName
+ * @param {LabelMap} [labelMap]
+ * @returns {string | null} The label ID, or null on failure.
+ */
+function createGmailLabel(labelName, labelMap) {
+  try {
+    if (labelMap?.[labelName]) return labelMap[labelName];
+    const created = /** @type {any} */ (Gmail).Users.Labels.create({ name: labelName }, "me");
+    if (created?.id) {
+      if (labelMap) labelMap[labelName] = created.id;
+      return created.id;
+    }
+    logError(`Gmail.Users.Labels.create returned no ID for "${labelName}"`);
+    return null;
+  } catch (error) {
+    logError(`Error creating Gmail label "${labelName}": ${error.message}`);
+    return null;
   }
 }
 
 /**
- * Creates a new Gmail label, supporting nested labels and adding parent labels to spreadsheet
+ * Classify an edit and dispatch to create/update/delete. The edit trigger
+ * uses this; tests use it directly.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} row
+ * @param {string} oldLabelName
+ * @param {string} newLabelName
+ * @param {LabelMap} [labelMap]
  */
-function createLabel(sheet, row, labelName) {
+function handleLabelChange(sheet, row, oldLabelName, newLabelName, labelMap) {
+  logDebug(`Processing label change: "${oldLabelName}" -> "${newLabelName}"`);
+
+  if (oldLabelName === "" && newLabelName !== "") {
+    createLabel(sheet, row, newLabelName, labelMap);
+  } else if (oldLabelName !== "" && newLabelName === "") {
+    deleteLabel(sheet, row, oldLabelName, labelMap);
+  } else if (oldLabelName !== "" && newLabelName !== "" && oldLabelName !== newLabelName) {
+    updateLabel(sheet, row, oldLabelName, newLabelName, labelMap);
+  }
+}
+
+/**
+ * Create a new Gmail label, creating any missing parents along the way.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} row
+ * @param {string} labelName
+ * @param {LabelMap} [labelMap]
+ */
+function createLabel(sheet, row, labelName, labelMap) {
   logDebug(`Creating label: "${labelName}"`);
+  const map = labelMap ?? fetchLabelMap();
 
   try {
-    // Check if label already exists
-    const existingId = getLabelId(labelName);
+    const existingId = map[labelName];
     if (existingId) {
       logDebug(`Label "${labelName}" already exists with ID: ${existingId}`);
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(existingId);
-      // Toast notification for existing label
       SpreadsheetApp.getActive().toast(`Label "${labelName}" already exists in Gmail.`, "Info", 3);
       return;
     }
 
-    // Check if this is a nested label and add parent labels to spreadsheet
-    addParentLabelsToSheet(sheet, labelName);
+    addParentLabelsToSheet(sheet, labelName, map);
 
-    // Create the label (now that all parents exist)
-    GmailApp.createLabel(labelName);
-
-    // Get the ID of the newly created label
-    const newLabelId = getLabelId(labelName);
-
+    const newLabelId = createGmailLabel(labelName, map);
     if (newLabelId) {
-      // Store the label ID in the hidden column
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(newLabelId);
       logDebug(`Label "${labelName}" created successfully with ID: ${newLabelId}`);
-
-      // Toast notification for new label
       SpreadsheetApp.getActive().toast(`New label "${labelName}" created in Gmail.`, "Success", 3);
     } else {
       logError(`Failed to retrieve ID for newly created label "${labelName}"`);
@@ -110,38 +159,37 @@ function createLabel(sheet, row, labelName) {
 }
 
 /**
- * Updates an existing Gmail label, with support for nested labels
+ * Rename a Gmail label by creating the new one, retagging threads, removing
+ * the old, and deleting it.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} row
+ * @param {string} oldLabelName
+ * @param {string} newLabelName
+ * @param {LabelMap} [labelMap]
  */
-function updateLabel(sheet, row, oldLabelName, newLabelName) {
+function updateLabel(sheet, row, oldLabelName, newLabelName, labelMap) {
   logDebug(`Updating label: "${oldLabelName}" -> "${newLabelName}"`);
+  const map = labelMap ?? fetchLabelMap();
 
   try {
-    // Get the ID of the old label
-    const oldLabelId = getLabelId(oldLabelName);
-
-    // If old label not found, just create the new one
+    const oldLabelId = map[oldLabelName];
     if (!oldLabelId) {
       logDebug(
         `Old label "${oldLabelName}" not found, creating new label "${newLabelName}" instead`
       );
-      createLabel(sheet, row, newLabelName);
+      createLabel(sheet, row, newLabelName, map);
       return;
     }
 
-    // Check if this is a nested label and add parent labels to spreadsheet
-    addParentLabelsToSheet(sheet, newLabelName);
+    addParentLabelsToSheet(sheet, newLabelName, map);
 
-    // Get all threads with the old label
     const threads = GmailApp.search(`label:${oldLabelName}`);
     logDebug(`Found ${threads.length} threads with label "${oldLabelName}"`);
 
-    // Create the new label
-    GmailApp.createLabel(newLabelName);
-
-    // Get the ID of the new label
-    const newLabelId = getLabelId(newLabelName);
+    const newLabelId = createGmailLabel(newLabelName, map);
     if (!newLabelId) {
-      logError(`Failed to get ID for new label "${newLabelName}"`);
+      logError(`Failed to create new label "${newLabelName}"`);
       SpreadsheetApp.getActive().toast(
         `Error updating label: couldn't create new label`,
         "Error",
@@ -150,44 +198,28 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
       return;
     }
 
-    // Get the actual label objects
     const oldLabel = GmailApp.getUserLabelByName(oldLabelName);
     const newLabel = GmailApp.getUserLabelByName(newLabelName);
-
     if (!oldLabel || !newLabel) {
       logError(`Failed to get label objects for "${oldLabelName}" or "${newLabelName}"`);
       return;
     }
 
-    // Process threads in batches
     const BATCH_SIZE = 100;
     for (let i = 0; i < threads.length; i += BATCH_SIZE) {
       const batch = threads.slice(i, i + BATCH_SIZE);
-
-      // Add the new label to threads
-      if (batch.length > 0) {
-        newLabel.addToThreads(batch);
-      }
+      if (batch.length > 0) newLabel.addToThreads(batch);
     }
-
-    // Remove the old label from threads in batches
     for (let i = 0; i < threads.length; i += BATCH_SIZE) {
       const batch = threads.slice(i, i + BATCH_SIZE);
-
-      if (batch.length > 0) {
-        oldLabel.removeFromThreads(batch);
-      }
+      if (batch.length > 0) oldLabel.removeFromThreads(batch);
     }
 
-    // Delete the old label
     oldLabel.deleteLabel();
+    delete map[oldLabelName];
 
-    // Update the label ID in the spreadsheet
     sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(newLabelId);
-
     logDebug(`Label updated successfully from "${oldLabelName}" to "${newLabelName}"`);
-
-    // Toast notification for label rename
     SpreadsheetApp.getActive().toast(
       `The label "${oldLabelName}" has been renamed to "${newLabelName}" within Gmail.`,
       "Success",
@@ -200,23 +232,25 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
 }
 
 /**
- * Deletes a Gmail label
+ * Delete a Gmail label — but only if no threads still reference it.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} row
+ * @param {string} labelName
+ * @param {LabelMap} [labelMap]
  */
-function deleteLabel(sheet, row, labelName) {
+function deleteLabel(sheet, row, labelName, labelMap) {
   logDebug(`Attempting to delete label: "${labelName}"`);
+  const map = labelMap ?? fetchLabelMap();
 
   try {
-    // Get the label ID
-    const labelId = getLabelId(labelName);
-
-    // If label doesn't exist, just clear the row and return
+    const labelId = map[labelName];
     if (!labelId) {
       logDebug(`Label "${labelName}" not found, nothing to delete`);
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
       return;
     }
 
-    // Get the label object
     const label = GmailApp.getUserLabelByName(labelName);
     if (!label) {
       logDebug(`Label object for "${labelName}" not found`);
@@ -224,32 +258,24 @@ function deleteLabel(sheet, row, labelName) {
       return;
     }
 
-    // Check if any threads use this label
     const threads = GmailApp.search(`label:${labelName}`);
-
     if (threads.length > 0) {
-      // There are threads with this label, send notification
       const message = `Cannot delete label "${labelName}" as it still has ${threads.length} threads using it.`;
       logDebug(message);
-
-      // Show warning in spreadsheet
       SpreadsheetApp.getActive().toast(message, "Warning", 10);
-
-      // Restore the label name in the spreadsheet
       sheet.getRange(row, CONFIG.NAME_COLUMN).setValue(labelName);
-    } else {
-      // No threads with this label, proceed with deletion
-      label.deleteLabel();
-      sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
-      logDebug(`Label "${labelName}" deleted successfully`);
-
-      // Toast notification for label deletion
-      SpreadsheetApp.getActive().toast(
-        `The label "${labelName}" has been deleted from Gmail.`,
-        "Info",
-        5
-      );
+      return;
     }
+
+    label.deleteLabel();
+    delete map[labelName];
+    sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).clearContent();
+    logDebug(`Label "${labelName}" deleted successfully`);
+    SpreadsheetApp.getActive().toast(
+      `The label "${labelName}" has been deleted from Gmail.`,
+      "Info",
+      5
+    );
   } catch (error) {
     logError(`Error deleting label "${labelName}": ${error.message}`);
     SpreadsheetApp.getActive().toast(`Error deleting label: ${error.message}`, "Error", 10);
@@ -257,65 +283,55 @@ function deleteLabel(sheet, row, labelName) {
 }
 
 /**
- * Adds parent labels to the spreadsheet for a nested label
+ * For a nested label like "Work/Projects/Foo", make sure each parent path
+ * exists both in Gmail and in the sheet, creating them in order if missing.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string} labelName
+ * @param {LabelMap} [labelMap]
  */
-function addParentLabelsToSheet(sheet, labelName) {
-  // Only process if this is a nested label
-  if (!labelName.includes("/")) {
-    return;
-  }
+function addParentLabelsToSheet(sheet, labelName, labelMap) {
+  if (!labelName.includes("/")) return;
 
-  // Create a map of existing sheet labels to check for parents
+  const map = labelMap ?? fetchLabelMap();
+
+  // Snapshot the sheet's existing label names so we know which parents need
+  // to be appended.
   const sheetLabelMap = {};
   const lastRow = sheet.getLastRow();
   for (let r = CONFIG.HEADER_ROW + 1; r <= lastRow; r++) {
     const currentLabel = sheet.getRange(r, CONFIG.NAME_COLUMN).getValue();
-    if (currentLabel) {
-      sheetLabelMap[currentLabel] = r;
-    }
+    if (currentLabel) sheetLabelMap[currentLabel] = r;
   }
 
-  // Process the nested structure
   const parts = labelName.split("/");
   let parentPath = "";
   let parentsAdded = 0;
 
-  // Create each level of the hierarchy if needed
   for (let i = 0; i < parts.length - 1; i++) {
-    if (parentPath) {
-      parentPath += "/";
-    }
+    if (parentPath) parentPath += "/";
     parentPath += parts[i];
 
-    // Create the parent label in Gmail if it doesn't exist
-    const parentId = getLabelId(parentPath);
-    if (!parentId) {
-      GmailApp.createLabel(parentPath);
-      logDebug(`Created parent label "${parentPath}" in Gmail`);
-      SpreadsheetApp.getActive().toast(
-        `New parent label "${parentPath}" created in Gmail.`,
-        "Info",
-        3
-      );
+    if (!map[parentPath]) {
+      const newId = createGmailLabel(parentPath, map);
+      if (newId) {
+        logDebug(`Created parent label "${parentPath}" in Gmail`);
+        SpreadsheetApp.getActive().toast(
+          `New parent label "${parentPath}" created in Gmail.`,
+          "Info",
+          3
+        );
+      }
     }
 
-    // Add the parent label to the spreadsheet if it doesn't exist
     if (!sheetLabelMap[parentPath]) {
-      // Append to the end of the sheet
       const newRow = lastRow + 1 + parentsAdded;
-
-      // Add the parent label to the new row
       sheet.getRange(newRow, CONFIG.NAME_COLUMN).setValue(parentPath);
-
-      // Get the parent label ID and add to hidden column
-      const parentLabelId = getLabelId(parentPath);
+      const parentLabelId = map[parentPath];
       if (parentLabelId) {
         sheet.getRange(newRow, CONFIG.LABEL_ID_COLUMN).setValue(parentLabelId);
       }
-
       logDebug(`Added parent label "${parentPath}" to spreadsheet at row ${newRow}`);
-
-      // Update the map to include the new parent
       sheetLabelMap[parentPath] = newRow;
       parentsAdded++;
     }
