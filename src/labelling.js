@@ -283,8 +283,53 @@ function deleteLabel(sheet, row, labelName, labelMap) {
 }
 
 /**
- * For a nested label like "Work/Projects/Foo", make sure each parent path
- * exists both in Gmail and in the sheet, creating them in order if missing.
+ * For a nested label like "Work/Projects/Foo", return the list of parent
+ * path segments in order: ["Work", "Work/Projects"]. Empty array for
+ * non-nested labels.
+ *
+ * Pure — used by both the edit path (which also appends parents to the
+ * sheet) and the sync path (which doesn't, since sync's Step 2 picks them
+ * up after they're created in Gmail).
+ *
+ * @param {string} labelName
+ * @returns {string[]}
+ */
+function parentLabelPaths(labelName) {
+  if (!labelName.includes("/")) return [];
+  const parts = labelName.split("/");
+  /** @type {string[]} */
+  const paths = [];
+  let parentPath = "";
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (parentPath) parentPath += "/";
+    parentPath += parts[i];
+    paths.push(parentPath);
+  }
+  return paths;
+}
+
+/**
+ * Ensure each parent path of a nested label exists in Gmail. Mutates
+ * `labelMap` to include any newly created parents so subsequent lookups in
+ * the same run see them.
+ *
+ * @param {string} labelName
+ * @param {LabelMap} labelMap
+ */
+function ensureParentLabelsInGmail(labelName, labelMap) {
+  for (const parentPath of parentLabelPaths(labelName)) {
+    if (!labelMap[parentPath]) {
+      const newId = createGmailLabel(parentPath, labelMap);
+      if (newId) logDebug(`Created parent label "${parentPath}" in Gmail`);
+    }
+  }
+}
+
+/**
+ * Same as ensureParentLabelsInGmail, but also appends any parent that's
+ * missing from the sheet. Used by the edit-trigger path; the sync path
+ * doesn't call this because its Step 2 picks up the newly-created parents
+ * naturally.
  *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {string} labelName
@@ -292,26 +337,29 @@ function deleteLabel(sheet, row, labelName, labelMap) {
  */
 function addParentLabelsToSheet(sheet, labelName, labelMap) {
   if (!labelName.includes("/")) return;
-
   const map = labelMap ?? fetchLabelMap();
 
   // Snapshot the sheet's existing label names so we know which parents need
   // to be appended.
+  /** @type {Record<string, number>} */
   const sheetLabelMap = {};
   const lastRow = sheet.getLastRow();
-  for (let r = CONFIG.HEADER_ROW + 1; r <= lastRow; r++) {
-    const currentLabel = sheet.getRange(r, CONFIG.NAME_COLUMN).getValue();
-    if (currentLabel) sheetLabelMap[currentLabel] = r;
+  const firstDataRow = CONFIG.HEADER_ROW + 1;
+  const dataRowCount = Math.max(0, lastRow - CONFIG.HEADER_ROW);
+  const existingNames =
+    dataRowCount > 0
+      ? sheet.getRange(firstDataRow, CONFIG.NAME_COLUMN, dataRowCount, 1).getValues()
+      : [];
+  for (let i = 0; i < existingNames.length; i++) {
+    const currentLabel = existingNames[i][0];
+    if (currentLabel) sheetLabelMap[currentLabel] = firstDataRow + i;
   }
 
-  const parts = labelName.split("/");
-  let parentPath = "";
-  let parentsAdded = 0;
+  // Stage append rows so we write them in one batch at the end.
+  /** @type {[string, string][]} */
+  const appendRows = [];
 
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (parentPath) parentPath += "/";
-    parentPath += parts[i];
-
+  for (const parentPath of parentLabelPaths(labelName)) {
     if (!map[parentPath]) {
       const newId = createGmailLabel(parentPath, map);
       if (newId) {
@@ -325,15 +373,16 @@ function addParentLabelsToSheet(sheet, labelName, labelMap) {
     }
 
     if (!sheetLabelMap[parentPath]) {
-      const newRow = lastRow + 1 + parentsAdded;
-      sheet.getRange(newRow, CONFIG.NAME_COLUMN).setValue(parentPath);
-      const parentLabelId = map[parentPath];
-      if (parentLabelId) {
-        sheet.getRange(newRow, CONFIG.LABEL_ID_COLUMN).setValue(parentLabelId);
-      }
-      logDebug(`Added parent label "${parentPath}" to spreadsheet at row ${newRow}`);
-      sheetLabelMap[parentPath] = newRow;
-      parentsAdded++;
+      const parentId = map[parentPath] ?? "";
+      appendRows.push([parentId, parentPath]);
+      logDebug(`Queueing parent label "${parentPath}" for append`);
+      // Track placeholder row so a later parent in this same call doesn't
+      // duplicate it.
+      sheetLabelMap[parentPath] = lastRow + appendRows.length;
     }
+  }
+
+  if (appendRows.length > 0) {
+    sheet.getRange(lastRow + 1, CONFIG.LABEL_ID_COLUMN, appendRows.length, 2).setValues(appendRows);
   }
 }

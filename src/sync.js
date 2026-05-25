@@ -93,20 +93,9 @@ function syncAllLabelsImpl(sheet) {
       const labelId = labelMap[labelName];
 
       if (!labelId) {
-        // Create parents first if this is a nested label.
-        if (labelName.includes("/")) {
-          const parts = labelName.split("/");
-          let parentPath = "";
-          for (let i = 0; i < parts.length - 1; i++) {
-            if (parentPath) parentPath += "/";
-            parentPath += parts[i];
-            if (!labelMap[parentPath]) {
-              createGmailLabel(parentPath, labelMap);
-              logDebug(`Created parent label "${parentPath}"`);
-            }
-          }
-        }
-
+        // Create parents first if this is a nested label. Sync's Step 2 picks
+        // up the parent rows we'd otherwise need to append explicitly.
+        ensureParentLabelsInGmail(labelName, labelMap);
         const newLabelId = createGmailLabel(labelName, labelMap);
         if (newLabelId) {
           idColumn[idIndex] = newLabelId;
