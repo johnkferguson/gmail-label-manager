@@ -1,2 +1,19 @@
-
+# Apps Script local config
 .clasp.json
+
+# Node / Bun
+node_modules/
+.bun/
+bun.lockb
+
+# Test output
+coverage/
+.vitest/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
