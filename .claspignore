@@ -1,0 +1,16 @@
+**/node_modules/**
+**/test/**
+**/*.test.js
+**/coverage/**
+package.json
+bun.lock
+bun.lockb
+biome.json
+vitest.config.js
+tsconfig.json
+.editorconfig
+.gitattributes
+.gitignore
+.github/**
+LICENSE
+README.md

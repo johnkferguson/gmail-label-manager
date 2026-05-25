@@ -1,80 +1,111 @@
 /**
- * sync.js - Gmail Label Manager
+ * sync.js — Gmail Label Manager
  *
- * Contains bidirectional synchronization functionality for Gmail labels.
+ * Bidirectional sync between Gmail labels and the configured sheet.
+ *
+ * Pulls the Gmail label list exactly once at the top and threads the
+ * resulting map through every helper that needs to look up or mutate a label.
+ * createGmailLabel updates the map in place, so newly-created labels are
+ * visible to subsequent steps without a second list fetch.
  */
 
 /**
- * Updates the bidirectional sync function to properly handle nested labels too
- * @return {Object} Results of the sync operation for notifications
+ * @typedef {object} SyncResults
+ * @property {string[]} createdInGmail
+ * @property {string[]} addedToSheet
+ * @property {string[]} updatedIds
+ */
+
+/**
+ * Run a one-shot bidirectional merge between Gmail and the sheet.
+ *
+ * @returns {SyncResults}
  */
 function syncAllLabels() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
-  let lastRow = sheet.getLastRow();
-  
-  // Results object to track changes for notifications
-  const results = {
-    createdInGmail: [],
-    addedToSheet: [],
-    updatedIds: []
-  };
-
-  // Get existing label map from Gmail
-  const labelMap = getLabelMap();
-
-  // Step 1: Create a map of all labels already in the spreadsheet
-  const sheetLabelMap = {};
-  for (let row = CONFIG.HEADER_ROW + 1; row <= lastRow; row++) {
-    const labelName = sheet.getRange(row, CONFIG.NAME_COLUMN).getValue();
-    if (labelName) {
-      sheetLabelMap[labelName] = row;
-    }
+  if (!sheet) {
+    const message = `Sheet "${CONFIG.SHEET_NAME}" not found — check CONFIG.SHEET_NAME.`;
+    logError(message);
+    SpreadsheetApp.getActive().toast(message, "Error", 10);
+    return { createdInGmail: [], addedToSheet: [], updatedIds: [] };
   }
 
-  // Step 2: Process existing sheet labels
-  for (const labelName in sheetLabelMap) {
+  // Document-scoped lock — prevents auto-sync (on open) and a manual "Sync
+  // All Labels" click from running concurrently, which could race on row
+  // appends in Step 2. tryLock(0) means contended calls no-op; the user can
+  // re-run from the menu once the other sync finishes.
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    logDebug("syncAllLabels skipped — another sync is already in flight");
+    SpreadsheetApp.getActive().toast("Another sync is in progress — try again shortly.", "Info", 5);
+    return { createdInGmail: [], addedToSheet: [], updatedIds: [] };
+  }
+
+  try {
+    return syncAllLabelsImpl(sheet);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Inner implementation — the locking + early-exit shell above wraps this.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {SyncResults}
+ */
+function syncAllLabelsImpl(sheet) {
+  let lastRow = sheet.getLastRow();
+
+  /** @type {SyncResults} */
+  const results = { createdInGmail: [], addedToSheet: [], updatedIds: [] };
+
+  // One Gmail API round-trip; mutated locally as we create.
+  const labelMap = fetchLabelMap();
+
+  // Snapshot of the labels currently in the sheet (name → row). Single batch
+  // read of the name column.
+  /** @type {Record<string, number>} */
+  const sheetLabelMap = {};
+  const firstDataRow = CONFIG.HEADER_ROW + 1;
+  const dataRowCount = Math.max(0, lastRow - CONFIG.HEADER_ROW);
+  const existingNames =
+    dataRowCount > 0
+      ? sheet.getRange(firstDataRow, CONFIG.NAME_COLUMN, dataRowCount, 1).getValues()
+      : [];
+  for (let i = 0; i < existingNames.length; i++) {
+    const labelName = existingNames[i][0];
+    if (labelName) sheetLabelMap[labelName] = firstDataRow + i;
+  }
+
+  // Step 1: sheet → Gmail. Stage the desired ID for each existing row in a
+  // local array, then write the whole ID column back in a single batch at
+  // the end. Avoids one setValue API call per row.
+  /** @type {(string | "")[]} */
+  const idColumn = dataRowCount > 0 ? new Array(dataRowCount).fill("") : [];
+  let anyStep1Writes = false;
+
+  for (const labelName of Object.keys(sheetLabelMap)) {
     const row = sheetLabelMap[labelName];
+    const idIndex = row - firstDataRow;
 
     try {
-      // Check if label exists in Gmail
       const labelId = labelMap[labelName];
 
       if (!labelId) {
-        // This is a new label to create
-        // For nested labels, ensure all parent labels exist first
-        if (labelName.includes('/')) {
-          const parts = labelName.split('/');
-          let parentPath = '';
-
-          // Create each level of the hierarchy if needed
-          for (let i = 0; i < parts.length - 1; i++) {
-            if (parentPath) {
-              parentPath += '/';
-            }
-            parentPath += parts[i];
-
-            // Create the parent label if it doesn't exist
-            const parentId = labelMap[parentPath];
-            if (!parentId) {
-              GmailApp.createLabel(parentPath);
-              logDebug(`Created parent label "${parentPath}"`);
-            }
-          }
-        }
-
-        // Create the label (now that all parents exist if needed)
-        GmailApp.createLabel(labelName);
-        results.createdInGmail.push(labelName);
-
-        // Get the new ID
-        const newLabelId = getLabelId(labelName);
+        // Create parents first if this is a nested label. Sync's Step 2 picks
+        // up the parent rows we'd otherwise need to append explicitly.
+        ensureParentLabelsInGmail(labelName, labelMap);
+        const newLabelId = createGmailLabel(labelName, labelMap);
         if (newLabelId) {
-          sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(newLabelId);
+          idColumn[idIndex] = newLabelId;
+          anyStep1Writes = true;
           logDebug(`Created label "${labelName}" during sync with ID: ${newLabelId}`);
+          results.createdInGmail.push(labelName);
         }
       } else {
-        // Label exists, update the ID
-        sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(labelId);
+        idColumn[idIndex] = labelId;
+        anyStep1Writes = true;
         logDebug(`Updated ID for existing label "${labelName}": ${labelId}`);
         results.updatedIds.push(labelName);
       }
@@ -83,37 +114,40 @@ function syncAllLabels() {
     }
   }
 
-  // Step 3: Find Gmail labels not in the spreadsheet
-  const response = Gmail.Users.Labels.list('me');
-  if (response && response.labels) {
-    for (const label of response.labels) {
-      // Skip system labels (they start with "CATEGORY_" or have reserved names)
-      if (label.type === 'system' ||
-        label.name.startsWith('CATEGORY_') ||
-        ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM'].includes(label.name)) {
-        continue;
-      }
-
-      // Skip labels already in the spreadsheet
-      if (sheetLabelMap[label.name]) {
-        continue;
-      }
-
-      // Add this label to the spreadsheet
-      lastRow++;
-      sheet.getRange(lastRow, CONFIG.LABEL_ID_COLUMN).setValue(label.id);
-      sheet.getRange(lastRow, CONFIG.NAME_COLUMN).setValue(label.name);
-      logDebug(`Added Gmail label "${label.name}" to spreadsheet`);
-      results.addedToSheet.push(label.name);
-    }
+  if (anyStep1Writes) {
+    sheet
+      .getRange(firstDataRow, CONFIG.LABEL_ID_COLUMN, idColumn.length, 1)
+      .setValues(idColumn.map((id) => [id]));
   }
 
-  // If not called from auto sync, show a general toast
-  if (!getAutoSyncEnabled() || !ScriptApp.getProjectTriggers().some(trigger => 
-      trigger.getEventType() === ScriptApp.EventType.ON_OPEN && 
-      trigger.getHandlerFunction() === 'onOpenWithFullPermissions')) {
-    SpreadsheetApp.getActive().toast('All labels synced between Spreadsheet and Gmail.');
+  // Step 2: Gmail → sheet. Append any user-managed Gmail label not already
+  // in the sheet, in a single batch write at the end. labelMap was filtered
+  // to exclude system labels at fetch time, so no further filtering needed.
+  /** @type {[string, string][]} */
+  const appendRows = [];
+  for (const [name, id] of Object.entries(labelMap)) {
+    if (sheetLabelMap[name]) continue;
+    appendRows.push([id, name]);
+    results.addedToSheet.push(name);
+    logDebug(`Queued Gmail label "${name}" for append`);
   }
-  
+  if (appendRows.length > 0) {
+    sheet.getRange(lastRow + 1, CONFIG.LABEL_ID_COLUMN, appendRows.length, 2).setValues(appendRows);
+    lastRow += appendRows.length;
+  }
+
+  // Suppress the generic toast when auto-sync is the caller — auto-sync
+  // renders its own detailed summary via showSyncResults.
+  if (
+    !getAutoSyncEnabled() ||
+    !ScriptApp.getProjectTriggers().some(
+      (trigger) =>
+        trigger.getEventType() === ScriptApp.EventType.ON_OPEN &&
+        trigger.getHandlerFunction() === "onOpenWithFullPermissions"
+    )
+  ) {
+    SpreadsheetApp.getActive().toast("All labels synced between Spreadsheet and Gmail.");
+  }
+
   return results;
 }

@@ -17,11 +17,9 @@ function onOpen() {
     setupLabelIdColumn();
 
     // Create a simple menu that shows options available with limited permissions
-    ui.createMenu('Gmail Labels')
-      .addItem('Click to Enable', 'promptForPermissions')
-      .addToUi();
+    ui.createMenu("Gmail Labels").addItem("Click to Enable", "promptForPermissions").addToUi();
   } catch (error) {
-    console.error("Error in onOpen: " + error.message);
+    console.error(`Error in onOpen: ${error.message}`);
   }
 }
 
@@ -38,18 +36,24 @@ function onOpenWithFullPermissions() {
     let editTriggerEnabled = false;
     const triggers = ScriptApp.getProjectTriggers();
     for (const trigger of triggers) {
-      if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
-        trigger.getHandlerFunction() === 'onEditTrigger') {
+      if (
+        trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
+        trigger.getHandlerFunction() === HANDLER_ON_EDIT
+      ) {
         editTriggerEnabled = true;
         break;
       }
     }
 
     // Create a full menu with all options
-    const menu = ui.createMenu('Gmail Labels')
-      .addItem((editTriggerEnabled ? '[ON] ' : '[OFF] ') + 'Trigger On Spreadsheet Change', 'toggleEditTrigger')
-      .addItem((getAutoSyncEnabled() ? '[ON] ' : '[OFF] ') + 'Auto Sync On Startup', 'toggleAutoSync')
-      .addItem('Sync All Labels', 'syncAllLabels');
+    const menu = ui
+      .createMenu("Gmail Labels")
+      .addItem(
+        `${editTriggerEnabled ? "[ON] " : "[OFF] "}Trigger On Spreadsheet Change`,
+        "toggleEditTrigger"
+      )
+      .addItem(`${getAutoSyncEnabled() ? "[ON] " : "[OFF] "}Auto Sync On Startup`, "toggleAutoSync")
+      .addItem("Sync All Labels", "syncAllLabels");
 
     menu.addToUi();
 
@@ -59,14 +63,14 @@ function onOpenWithFullPermissions() {
         const results = syncAllLabels();
         showSyncResults(results);
       } catch (error) {
-        logError('Auto sync failed: ' + error.message);
-        SpreadsheetApp.getActive().toast('Auto sync failed - check logs', 'Error', 6);
+        logError(`Auto sync failed: ${error.message}`);
+        SpreadsheetApp.getActive().toast("Auto sync failed - check logs", "Error", 6);
       }
     }
 
     logDebug("Full permissions menu created successfully");
   } catch (error) {
-    console.error("Error in onOpenWithFullPermissions: " + error.message);
+    console.error(`Error in onOpenWithFullPermissions: ${error.message}`);
   }
 }
 
@@ -78,9 +82,9 @@ function promptForPermissions() {
 
   // Show a dialog with instructions
   const response = ui.alert(
-    'Additional Permissions Required',
-    'To use all features of this script, you need to grant additional permissions.\n\n' +
-    'Would you like to enable these permissions now?',
+    "Additional Permissions Required",
+    "To use all features of this script, you need to grant additional permissions.\n\n" +
+      "Would you like to enable these permissions now?",
     ui.ButtonSet.OK_CANCEL
   );
 
@@ -91,8 +95,8 @@ function promptForPermissions() {
 
       // Show success message
       ui.alert(
-        'Success',
-        'Permissions have been requested. Please refresh the spreadsheet to see all options.',
+        "Success",
+        "Permissions have been requested. Please refresh the spreadsheet to see all options.",
         ui.ButtonSet.OK
       );
 
@@ -101,14 +105,16 @@ function promptForPermissions() {
         onOpenWithFullPermissions();
       } catch (e) {
         // This might fail if permissions aren't fully granted yet, which is expected
-        console.log("Could not run full permissions function yet: " + e.message);
+        console.log(`Could not run full permissions function yet: ${e.message}`);
       }
     } catch (e) {
       // If direct enabling fails, show error
       ui.alert(
-        'Error',
-        'Unable to enable permissions: ' + e.message + '\n\n' +
-        'Please try refreshing the page and trying again.',
+        "Error",
+        "Unable to enable permissions: " +
+          e.message +
+          "\n\n" +
+          "Please try refreshing the page and trying again.",
         ui.ButtonSet.OK
       );
     }
@@ -127,7 +133,7 @@ function setupLabelIdColumn() {
     }
 
     // Create header for ID column if needed
-    sheet.getRange(CONFIG.HEADER_ROW, CONFIG.LABEL_ID_COLUMN).setValue('Label ID');
+    sheet.getRange(CONFIG.HEADER_ROW, CONFIG.LABEL_ID_COLUMN).setValue("Label ID");
 
     // Try to hide the column
     try {
@@ -142,57 +148,36 @@ function setupLabelIdColumn() {
   }
 }
 
-
 /**
- * Shows detailed toast notifications for sync results
- * @param {Object} results - The results from syncAllLabels operation
+ * Render a single multi-line toast summarizing a sync run.
+ *
+ * Previously this fired up to three sequential toasts with Utilities.sleep
+ * between them, hoping the sleeps would serialize the UI. They didn't —
+ * Sheets only shows one toast at a time and the second one just replaced
+ * the first. Net effect: a 1-second wall-clock delay and the user only saw
+ * the last message.
+ *
+ * One toast, formatted, no sleeps.
+ *
+ * @param {{ createdInGmail?: string[], addedToSheet?: string[] }} results
  */
 function showSyncResults(results) {
   const ss = SpreadsheetApp.getActive();
-  
-  // Use a timeout approach to ensure toasts are displayed sequentially
-  // Start with a summary notification
-  const totalChanges =
-    (results.createdInGmail ? results.createdInGmail.length : 0) +
-    (results.addedToSheet ? results.addedToSheet.length : 0);
+  const created = results.createdInGmail ?? [];
+  const added = results.addedToSheet ?? [];
+  const total = created.length + added.length;
 
-  if (totalChanges > 0) {
-    ss.toast(
-      `Auto Sync complete: ${totalChanges} label(s) synchronized`,
-      'Auto Sync Complete',
-      5
-    );
-    
-    // Add a slight delay before showing detailed notifications
-    Utilities.sleep(500);
-    
-    // Show notifications for labels created in Gmail
-    if (results.createdInGmail && results.createdInGmail.length > 0) {
-      const createdLabels = results.createdInGmail.join('", "');
-      ss.toast(
-        `Labels found in spreadsheet but not in Gmail: "${createdLabels}". These labels have been created in Gmail.`,
-        'Labels Created in Gmail',
-        5
-      );
-    }
-    
-    // Add another slight delay
-    Utilities.sleep(500);
-    
-    // Show notifications for labels added to spreadsheet
-    if (results.addedToSheet && results.addedToSheet.length > 0) {
-      const addedLabels = results.addedToSheet.join('", "');
-      ss.toast(
-        `Labels found in Gmail but not in spreadsheet: "${addedLabels}". These labels have been added to spreadsheet.`,
-        'Labels Added to Spreadsheet',
-        5
-      );
-    }
-  } else {
-    ss.toast(
-      'Auto Sync complete: No changes needed',
-      'Auto Sync Complete',
-      3
-    );
+  if (total === 0) {
+    ss.toast("Auto Sync complete: No changes needed", "Auto Sync Complete", 3);
+    return;
   }
+
+  const lines = [`${total} label(s) synchronized.`];
+  if (created.length > 0) {
+    lines.push(`Created in Gmail: ${created.map((n) => `"${n}"`).join(", ")}`);
+  }
+  if (added.length > 0) {
+    lines.push(`Added to sheet: ${added.map((n) => `"${n}"`).join(", ")}`);
+  }
+  ss.toast(lines.join("\n"), "Auto Sync Complete", 8);
 }
