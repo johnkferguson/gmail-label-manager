@@ -1,73 +1,151 @@
 # Gmail Label Manager
 
-A Google Apps Script project that allows for the management of Gmail labels via a Google Sheet.
+[![CI](https://github.com/johnkferguson/gmail-label-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/johnkferguson/gmail-label-manager/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+A Google Apps Script add-on that lets you manage your Gmail labels from a Google Sheet. Edit a label name in the sheet → Gmail renames it. Add a row → Gmail creates it. Two-way sync keeps both sides aligned.
 
 ## Features
 
-- Real-time updates to Gmail when labels are modified in the sheet
-- Bidirectional sync between Gmail labels and a Google Sheet using a merge sync
-- Ability to auto-sync labels upon opening the spreadsheet
-- Support for nested labels
-- Automatic creation of parent labels
-- Menu integration with Google Sheets
+- **Live edits**: rename / add / remove a Gmail label by editing the sheet.
+- **Bidirectional merge sync**: one-shot reconciliation between sheet ↔ Gmail.
+- **Auto-sync on open**: optional — runs the merge when you open the spreadsheet.
+- **Nested labels**: parent labels are auto-created in both Gmail and the sheet.
+- **Sheet menu integration**: enable/disable the live trigger and run sync from a "Gmail Labels" menu.
 
-## Menu Options
+## How it works
 
-After the script has been enabled, the following options will be available in the 'Gmail Labels' menu:
+The script is **container-bound** to a single Google Sheet (you create it via `clasp create --type sheets`, which binds it to a sheet you own). Two trigger modes:
 
-- **Trigger On Spreadsheet Change**: If enabled, when the spreadsheet is modified, it will then trigger a creation, deletion, or update of the corresponding label in Gmail.
-- **Auto Sync On Startup**: If enabled, when the spreadsheet is first opened, it will bi-directionally sync all labels between Gmail and the sheet.
-- **Sync All Labels**: This will do a one-time bi-directional sync of all labels between Gmail and the spreadsheet.
+- **`onOpen` (simple trigger, limited permissions)** runs unauthenticated when the sheet opens. It can only show a "Click to Enable" menu — Apps Script restricts what unauthorized simple triggers can do.
+- **`onOpenWithFullPermissions` (installable trigger)** is created after the user clicks Enable. From then on, the full menu (toggles + sync button) appears on every open, and (if auto-sync is on) a sync runs automatically.
 
-## Syncing Strategy
+The live propagation uses a separate installable **edit trigger** (`onEditTrigger`). When you change a label name in column B, it diffs old vs new and dispatches to create / rename / delete in Gmail.
 
-For both **Auto Sync On Startup** and **Sync All Labels**, the script will do a merge sync between Gmail labels and the spreadsheet. This means that:
+## Privacy & security
 
-1. Any labels in the spreadsheet that do not exist in Gmail will be created in Gmail.
-2. Any labels in Gmail that do not exist in the spreadsheet will be added to the spreadsheet.
-3. If there is a mismatch between the label names in the spreadsheet and Gmail, the script will not delete or modify the labels in either place.
+- **No third-party servers.** The code runs as your own Apps Script project, bound to your own sheet, under your own Google account. Your labels and your script — there's nowhere else for it to go.
+- **You install it yourself** via `clasp push`. Read every line first; it's a single repo.
+- **No outbound network calls.** Only first-party Google APIs (Gmail Advanced Service, GmailApp, SpreadsheetApp, PropertiesService, ScriptApp, LockService).
+- **Minimal scopes.** The OAuth consent screen will ask for exactly these:
+  | Scope | Used for |
+  |---|---|
+  | `gmail.modify` | Read your Gmail labels and create / rename / delete them |
+  | `spreadsheets.currentonly` | Read / write **only** the spreadsheet this script is bound to |
+  | `script.scriptapp` | Register the installable triggers (onOpen + onEdit) |
 
-After labels are in sync, and **Trigger On Spreadsheet Change** is enabled, it is best to handle the modification of all labels via the spreadsheet.
+  The `spreadsheets.currentonly` scope is the narrowest available — the script can only touch the one sheet it's bound to, not your other spreadsheets.
 
-Note that if a label has any emails attached to it within Gmail, the script will not allow the label to be deleted from within the spreadsheet.
+To revoke: <https://myaccount.google.com/permissions> → find the script project → Remove access.
 
-## Setup and Deployment
+## Setup
 
-1. Create a new Google Sheet or open an existing one
-2. Rename your sheet to match the SHEET_NAME in the CONFIG (default is 'Labels')
-3. Set up your sheet with these columns:
-   - Column A: Label ID (hidden, managed by script)
-   - Column B: Label Name
-4. Install clasp: `npm install -g @google/clasp`
-5. Login to Google: `clasp login`
-6. Create a new script: `clasp create --type sheets --title "Gmail Label Manager"`
-7. Copy `.clasp-example.json` to `.clasp.json` and set the scriptId to your own script ID
-8. Push the code: `clasp push`
-9. Open the script: `clasp open`
-10. Visit your newly created Google Sheet (refresh page if it was already open)
-11. Click the 'Gmail Labels' menu item and select 'Click to Enable'
-12. Grant the script the required permissions when prompted
-13. Click the 'Gmail Labels' menu item and select from the available options
+You'll need [Bun](https://bun.sh), a Google account, and the Apps Script API enabled at <https://script.google.com/home/usersettings>.
 
-Note: The `.clasp.json` file is in `.gitignore` to prevent accidental commits of personal script IDs. This file ensures files are loaded in the correct order during deployment.
-
-## File Structure
-
-This project has been organized into a modular structure:
-
-```tree
-gmail-label-manager/
-├── src/                  # Source code files
-│   ├── config.js         # Configuration settings
-│   ├── logging.js        # Logging utilities
-│   ├── ui.js             # User interface and menu creation
-│   ├── triggers.js       # Script triggers and event handlers
-│   ├── labelling.js      # Label management functionality
-│   ├── sync.js           # Bidirectional synchronization
-│   └── appsscript.json   # Project manifest with Gmail API service definition
-└── .clasp-example.json   # Example Clasp configuration template
+```bash
+bun install
+bunx clasp login
+bunx clasp create --type sheets --title "Gmail Label Manager"
+cp .clasp-example.json .clasp.json    # then paste in the scriptId from the create output
+bun run push
 ```
+
+The `--type sheets` flag creates a new Google Sheet AND a bound script — both newly created, owned by you.
+
+In the new sheet:
+
+1. Rename the first sheet (tab) to **`Labels`** (matches `CONFIG.SHEET_NAME`).
+2. Refresh the page so the simple trigger fires and the menu appears.
+3. **Gmail Labels → Click to Enable**. Grant the requested scopes.
+4. Refresh the page once more — the full menu appears.
+5. **Sync All Labels** to pull your existing Gmail labels into the sheet.
+
+## Menu options
+
+After enabling, the **Gmail Labels** menu has:
+
+| Option | Behavior |
+|---|---|
+| `[ON]/[OFF] Trigger On Spreadsheet Change` | Toggle live edit-trigger. When ON, editing column B in the Labels sheet immediately creates / renames / deletes the corresponding Gmail label. |
+| `[ON]/[OFF] Auto Sync On Startup` | Toggle the bidirectional merge that runs every time the sheet opens. |
+| `Sync All Labels` | Run the merge sync once. |
+
+## Sheet format
+
+| Column | Purpose |
+|---|---|
+| A — **`Label ID`** | Hidden, managed by the script. Stores the Gmail label ID for each row. Don't edit. |
+| B — **`Label Name`** | The label name. This is the only column you edit. |
+
+Use a slash (`/`) for nested labels — e.g. `Work/Projects/Foo`. Missing parent labels (`Work`, `Work/Projects`) are auto-created in Gmail and appended to the sheet.
+
+## Sync semantics
+
+The merge sync (Auto Sync On Startup or Sync All Labels) reconciles both sides without deletion:
+
+1. Sheet labels missing from Gmail → **created** in Gmail. Nested parents created too.
+2. Gmail labels missing from the sheet → **appended** to the sheet (rows added at the bottom).
+3. Labels present in both → the hidden ID column is refreshed to the current Gmail ID.
+
+No label is ever deleted by the merge — to delete one, **clear the name cell** in column B with the edit trigger enabled. If the label still has emails attached, the script refuses to delete it and restores the cell.
+
+## Configuration
+
+`src/config.js` is split into:
+
+- **`USER_CONFIG`** — user-facing settings you might change per installation:
+  | Field | Default | Description |
+  |---|---|---|
+  | `SHEET_NAME` | `"Labels"` | Name of the sheet tab to sync. Must match the actual tab name. |
+  | `DEBUG_MODE` | `false` | Verbose `[DEBUG]` lines to View → Logs. Flip to `true` while debugging. |
+- **`APP_CONFIG`** — internal sheet layout (`HEADER_ROW`, `LABEL_ID_COLUMN`, `NAME_COLUMN`). Don't change after you've populated a sheet.
+
+## Development
+
+```bash
+bun install
+bun run lint        # biome check
+bun run lint:fix    # biome check --write
+bun run format
+bun run test        # vitest run
+bun run typecheck   # tsc --noEmit (JSDoc-based, no compile)
+bun run push        # clasp push
+bun run pull        # clasp pull
+```
+
+The source under `src/` is Apps Script JS — top-level `function` and `const` declarations are global at runtime, so no `import` / `export`. Tests load each source file into a Node `vm` context with mocked GAS globals (`Gmail`, `GmailApp`, `SpreadsheetApp`, etc.) via `test/loader.js`.
+
+### Project layout
+
+```text
+src/
+  appsscript.json   — manifest (scopes, runtime, Gmail Advanced Service)
+  config.js         — USER_CONFIG + APP_CONFIG → CONFIG
+  logging.js        — logDebug / logError
+  labelling.js      — fetchLabelMap, createGmailLabel, parentLabelPaths,
+                      handleLabelChange, createLabel, updateLabel,
+                      deleteLabel, ensureParentLabelsInGmail,
+                      addParentLabelsToSheet
+  sync.js           — syncAllLabels (one-shot bidirectional merge)
+  triggers.js       — onEditTrigger, install/toggle for the edit trigger,
+                      auto-sync state
+  ui.js             — onOpen, onOpenWithFullPermissions, menu, setup,
+                      showSyncResults
+
+test/
+  loader.js         — vm-based source loader
+  mocks/            — Gmail, SpreadsheetApp, PropertiesService, LockService
+  *.test.js         — vitest suites
+```
+
+## Troubleshooting
+
+- **Permission errors / "Click to Enable" never updates** — re-authorize from the menu. The simple `onOpen` trigger has no scope; the installable `onOpenWithFullPermissions` is what does the work.
+- **`Sheet "Labels" not found`** — your tab name doesn't match `CONFIG.SHEET_NAME`. Either rename the tab or update the config.
+- **Label rename leaves both labels in Gmail** — the rename runs add-new → remove-old → delete-old. If the script hits Apps Script's 6-minute runtime cap mid-rename, you can end up with both labels. Re-run "Sync All Labels" to reconcile.
+- **Can't delete a label** — the script refuses to delete a Gmail label that still has emails on it. Move/archive the emails first, then clear the cell again.
+- **Verbose logs missing** — set `USER_CONFIG.DEBUG_MODE = true` in `src/config.js` and `bun run push`.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).
