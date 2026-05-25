@@ -38,7 +38,7 @@ function onOpenWithFullPermissions() {
     for (const trigger of triggers) {
       if (
         trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
-        trigger.getHandlerFunction() === "onEditTrigger"
+        trigger.getHandlerFunction() === HANDLER_ON_EDIT
       ) {
         editTriggerEnabled = true;
         break;

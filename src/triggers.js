@@ -1,24 +1,30 @@
 /**
- * triggers.js - Gmail Label Manager
+ * triggers.js — Gmail Label Manager
  *
- * Contains functions related to installable triggers, event handling, and settings.
+ * Installable trigger management and event handlers.
+ *
+ * Trigger handler names are referenced as strings by ScriptApp.newTrigger and
+ * matched against trigger.getHandlerFunction(); centralizing them as
+ * constants prevents a rename from silently orphaning a registered trigger.
  */
 
+const HANDLER_OPEN_FULL = "onOpenWithFullPermissions";
+const HANDLER_ON_EDIT = "onEditTrigger";
+
 /**
- * Creates the installable trigger for full permissions
+ * Installs the onOpen handler that runs with full permissions. Idempotent —
+ * removes any prior trigger with the same handler before creating.
  */
 function createInstallableTrigger() {
   try {
-    // Remove any existing triggers for the same function first
     const triggers = ScriptApp.getProjectTriggers();
     for (const trigger of triggers) {
-      if (trigger.getHandlerFunction() === "onOpenWithFullPermissions") {
+      if (trigger.getHandlerFunction() === HANDLER_OPEN_FULL) {
         ScriptApp.deleteTrigger(trigger);
       }
     }
 
-    // Create a new installable trigger
-    ScriptApp.newTrigger("onOpenWithFullPermissions")
+    ScriptApp.newTrigger(HANDLER_OPEN_FULL)
       .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
       .onOpen()
       .create();
@@ -32,24 +38,29 @@ function createInstallableTrigger() {
 }
 
 /**
- * Toggles the edit trigger on/off
+ * Toggle the on-edit trigger on/off.
+ *
+ * Important: match BOTH event type AND handler name. The earlier version
+ * matched only event type and would clobber any other ON_EDIT trigger that
+ * happened to exist on the spreadsheet (e.g. a future feature or another
+ * script bound to the same sheet).
  */
 function toggleEditTrigger() {
-  // Check current status
   const triggers = ScriptApp.getProjectTriggers();
-  let triggerExists = false;
+  let triggerExisted = false;
 
   for (const trigger of triggers) {
-    if (trigger.getEventType() === ScriptApp.EventType.ON_EDIT) {
-      // Trigger exists, so delete it
+    if (
+      trigger.getEventType() === ScriptApp.EventType.ON_EDIT &&
+      trigger.getHandlerFunction() === HANDLER_ON_EDIT
+    ) {
       ScriptApp.deleteTrigger(trigger);
-      triggerExists = true;
+      triggerExisted = true;
     }
   }
 
-  // If trigger didn't exist, create it
-  if (!triggerExists) {
-    ScriptApp.newTrigger("onEditTrigger")
+  if (!triggerExisted) {
+    ScriptApp.newTrigger(HANDLER_ON_EDIT)
       .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
       .onEdit()
       .create();
@@ -58,56 +69,43 @@ function toggleEditTrigger() {
     SpreadsheetApp.getActive().toast("Row change trigger disabled");
   }
 
-  // Refresh the menu
+  // Refresh the menu so the [ON]/[OFF] prefix reflects the new state.
   onOpenWithFullPermissions();
 }
 
 /**
- * Handler for edit events in the spreadsheet
+ * Edit event handler. Filters to our target sheet + name column only.
  */
 function onEditTrigger(e) {
   try {
-    // Get sheet, row, and column of edit
     const sheet = e.source.getActiveSheet();
-    const sheetName = sheet.getName();
-
-    // Only process edits in our target sheet
-    if (sheetName !== CONFIG.SHEET_NAME) return;
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
 
     const row = e.range.getRow();
     const column = e.range.getColumn();
-
-    // Skip header row
     if (row <= CONFIG.HEADER_ROW) return;
+    if (column !== CONFIG.NAME_COLUMN) return;
 
-    // Only process changes to the name column
-    if (column === CONFIG.NAME_COLUMN) {
-      logDebug(`Change detected in Name column at row ${row}`);
+    logDebug(`Change detected in Name column at row ${row}`);
+    const newLabelName = e.value || "";
+    const oldLabelName = e.oldValue || "";
 
-      const newLabelName = e.value || "";
-      const oldLabelName = e.oldValue || "";
-
-      handleLabelChange(sheet, row, oldLabelName, newLabelName);
-    }
+    handleLabelChange(sheet, row, oldLabelName, newLabelName);
   } catch (error) {
     logError(`Error in onEditTrigger: ${error.message}`);
   }
 }
 
 /**
- * Gets the auto sync setting status
- * @return {boolean} Whether auto sync is enabled
+ * @returns {boolean}
  */
 function getAutoSyncEnabled() {
   return PropertiesService.getUserProperties().getProperty("autoSyncEnabled") === "true";
 }
 
-/**
- * Toggles the auto sync setting on/off
- */
 function toggleAutoSync() {
   const enabled = !getAutoSyncEnabled();
   PropertiesService.getUserProperties().setProperty("autoSyncEnabled", enabled.toString());
   SpreadsheetApp.getActive().toast(`Auto Sync ${enabled ? "ENABLED" : "DISABLED"}`);
-  onOpenWithFullPermissions(); // Refresh menu
+  onOpenWithFullPermissions();
 }
