@@ -75,17 +75,30 @@ function toggleEditTrigger() {
 
 /**
  * Edit event handler. Filters to our target sheet + name column only.
+ *
+ * Wrapped in a document-scoped lock: two near-simultaneous edits (paste,
+ * autofill, undo+redo) can fire onEdit in parallel. Without serialization
+ * they race on getLabelId / setValue and can double-create or write a stale
+ * ID back. tryLock(0) means a contended edit no-ops immediately; the user's
+ * change is still in the sheet, so they can re-trigger the sync via the
+ * "Sync All Labels" menu if needed.
  */
 function onEditTrigger(e) {
+  const sheet = e.source.getActiveSheet();
+  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+
+  const row = e.range.getRow();
+  const column = e.range.getColumn();
+  if (row <= CONFIG.HEADER_ROW) return;
+  if (column !== CONFIG.NAME_COLUMN) return;
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    logDebug("onEditTrigger skipped — another edit is in flight");
+    return;
+  }
+
   try {
-    const sheet = e.source.getActiveSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-    const row = e.range.getRow();
-    const column = e.range.getColumn();
-    if (row <= CONFIG.HEADER_ROW) return;
-    if (column !== CONFIG.NAME_COLUMN) return;
-
     logDebug(`Change detected in Name column at row ${row}`);
     const newLabelName = e.value || "";
     const oldLabelName = e.oldValue || "";
@@ -93,6 +106,8 @@ function onEditTrigger(e) {
     handleLabelChange(sheet, row, oldLabelName, newLabelName);
   } catch (error) {
     logError(`Error in onEditTrigger: ${error.message}`);
+  } finally {
+    lock.releaseLock();
   }
 }
 

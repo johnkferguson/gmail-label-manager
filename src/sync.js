@@ -29,6 +29,32 @@ function syncAllLabels() {
     SpreadsheetApp.getActive().toast(message, "Error", 10);
     return { createdInGmail: [], addedToSheet: [], updatedIds: [] };
   }
+
+  // Document-scoped lock — prevents auto-sync (on open) and a manual "Sync
+  // All Labels" click from running concurrently, which could race on row
+  // appends in Step 2. tryLock(0) means contended calls no-op; the user can
+  // re-run from the menu once the other sync finishes.
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    logDebug("syncAllLabels skipped — another sync is already in flight");
+    SpreadsheetApp.getActive().toast("Another sync is in progress — try again shortly.", "Info", 5);
+    return { createdInGmail: [], addedToSheet: [], updatedIds: [] };
+  }
+
+  try {
+    return syncAllLabelsImpl(sheet);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Inner implementation — the locking + early-exit shell above wraps this.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {SyncResults}
+ */
+function syncAllLabelsImpl(sheet) {
   let lastRow = sheet.getLastRow();
 
   /** @type {SyncResults} */
