@@ -12,7 +12,7 @@
 function getLabelMap() {
   try {
     // Use the Gmail Advanced Service to get all labels
-    const response = Gmail.Users.Labels.list('me');
+    const response = Gmail.Users.Labels.list("me");
 
     if (!response || !response.labels) {
       logError("No labels found in the Gmail account");
@@ -75,7 +75,7 @@ function createLabel(sheet, row, labelName) {
       logDebug(`Label "${labelName}" already exists with ID: ${existingId}`);
       sheet.getRange(row, CONFIG.LABEL_ID_COLUMN).setValue(existingId);
       // Toast notification for existing label
-      SpreadsheetApp.getActive().toast(`Label "${labelName}" already exists in Gmail.`, 'Info', 3);
+      SpreadsheetApp.getActive().toast(`Label "${labelName}" already exists in Gmail.`, "Info", 3);
       return;
     }
 
@@ -94,14 +94,18 @@ function createLabel(sheet, row, labelName) {
       logDebug(`Label "${labelName}" created successfully with ID: ${newLabelId}`);
 
       // Toast notification for new label
-      SpreadsheetApp.getActive().toast(`New label "${labelName}" created in Gmail.`, 'Success', 3);
+      SpreadsheetApp.getActive().toast(`New label "${labelName}" created in Gmail.`, "Success", 3);
     } else {
       logError(`Failed to retrieve ID for newly created label "${labelName}"`);
-      SpreadsheetApp.getActive().toast(`Created label but couldn't retrieve its ID`, 'Warning', 5);
+      SpreadsheetApp.getActive().toast(`Created label but couldn't retrieve its ID`, "Warning", 5);
     }
   } catch (error) {
     logError(`Error creating label "${labelName}": ${error.message}`);
-    SpreadsheetApp.getActive().toast(`Error creating label "${labelName}": ${error.message}`, 'Error', 10);
+    SpreadsheetApp.getActive().toast(
+      `Error creating label "${labelName}": ${error.message}`,
+      "Error",
+      10
+    );
   }
 }
 
@@ -117,7 +121,9 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
 
     // If old label not found, just create the new one
     if (!oldLabelId) {
-      logDebug(`Old label "${oldLabelName}" not found, creating new label "${newLabelName}" instead`);
+      logDebug(
+        `Old label "${oldLabelName}" not found, creating new label "${newLabelName}" instead`
+      );
       createLabel(sheet, row, newLabelName);
       return;
     }
@@ -136,7 +142,11 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
     const newLabelId = getLabelId(newLabelName);
     if (!newLabelId) {
       logError(`Failed to get ID for new label "${newLabelName}"`);
-      SpreadsheetApp.getActive().toast(`Error updating label: couldn't create new label`, 'Error', 10);
+      SpreadsheetApp.getActive().toast(
+        `Error updating label: couldn't create new label`,
+        "Error",
+        10
+      );
       return;
     }
 
@@ -178,10 +188,14 @@ function updateLabel(sheet, row, oldLabelName, newLabelName) {
     logDebug(`Label updated successfully from "${oldLabelName}" to "${newLabelName}"`);
 
     // Toast notification for label rename
-    SpreadsheetApp.getActive().toast(`The label "${oldLabelName}" has been renamed to "${newLabelName}" within Gmail.`, 'Success', 5);
+    SpreadsheetApp.getActive().toast(
+      `The label "${oldLabelName}" has been renamed to "${newLabelName}" within Gmail.`,
+      "Success",
+      5
+    );
   } catch (error) {
     logError(`Error updating label from "${oldLabelName}" to "${newLabelName}": ${error.message}`);
-    SpreadsheetApp.getActive().toast(`Error updating label: ${error.message}`, 'Error', 10);
+    SpreadsheetApp.getActive().toast(`Error updating label: ${error.message}`, "Error", 10);
   }
 }
 
@@ -219,7 +233,7 @@ function deleteLabel(sheet, row, labelName) {
       logDebug(message);
 
       // Show warning in spreadsheet
-      SpreadsheetApp.getActive().toast(message, 'Warning', 10);
+      SpreadsheetApp.getActive().toast(message, "Warning", 10);
 
       // Restore the label name in the spreadsheet
       sheet.getRange(row, CONFIG.NAME_COLUMN).setValue(labelName);
@@ -230,11 +244,15 @@ function deleteLabel(sheet, row, labelName) {
       logDebug(`Label "${labelName}" deleted successfully`);
 
       // Toast notification for label deletion
-      SpreadsheetApp.getActive().toast(`The label "${labelName}" has been deleted from Gmail.`, 'Info', 5);
+      SpreadsheetApp.getActive().toast(
+        `The label "${labelName}" has been deleted from Gmail.`,
+        "Info",
+        5
+      );
     }
   } catch (error) {
     logError(`Error deleting label "${labelName}": ${error.message}`);
-    SpreadsheetApp.getActive().toast(`Error deleting label: ${error.message}`, 'Error', 10);
+    SpreadsheetApp.getActive().toast(`Error deleting label: ${error.message}`, "Error", 10);
   }
 }
 
@@ -243,7 +261,7 @@ function deleteLabel(sheet, row, labelName) {
  */
 function addParentLabelsToSheet(sheet, labelName) {
   // Only process if this is a nested label
-  if (!labelName.includes('/')) {
+  if (!labelName.includes("/")) {
     return;
   }
 
@@ -258,14 +276,14 @@ function addParentLabelsToSheet(sheet, labelName) {
   }
 
   // Process the nested structure
-  const parts = labelName.split('/');
-  let parentPath = '';
+  const parts = labelName.split("/");
+  let parentPath = "";
   let parentsAdded = 0;
 
   // Create each level of the hierarchy if needed
   for (let i = 0; i < parts.length - 1; i++) {
     if (parentPath) {
-      parentPath += '/';
+      parentPath += "/";
     }
     parentPath += parts[i];
 
@@ -274,7 +292,11 @@ function addParentLabelsToSheet(sheet, labelName) {
     if (!parentId) {
       GmailApp.createLabel(parentPath);
       logDebug(`Created parent label "${parentPath}" in Gmail`);
-      SpreadsheetApp.getActive().toast(`New parent label "${parentPath}" created in Gmail.`, 'Info', 3);
+      SpreadsheetApp.getActive().toast(
+        `New parent label "${parentPath}" created in Gmail.`,
+        "Info",
+        3
+      );
     }
 
     // Add the parent label to the spreadsheet if it doesn't exist

@@ -11,12 +11,12 @@
 function syncAllLabels() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
   let lastRow = sheet.getLastRow();
-  
+
   // Results object to track changes for notifications
   const results = {
     createdInGmail: [],
     addedToSheet: [],
-    updatedIds: []
+    updatedIds: [],
   };
 
   // Get existing label map from Gmail
@@ -42,14 +42,14 @@ function syncAllLabels() {
       if (!labelId) {
         // This is a new label to create
         // For nested labels, ensure all parent labels exist first
-        if (labelName.includes('/')) {
-          const parts = labelName.split('/');
-          let parentPath = '';
+        if (labelName.includes("/")) {
+          const parts = labelName.split("/");
+          let parentPath = "";
 
           // Create each level of the hierarchy if needed
           for (let i = 0; i < parts.length - 1; i++) {
             if (parentPath) {
-              parentPath += '/';
+              parentPath += "/";
             }
             parentPath += parts[i];
 
@@ -84,13 +84,15 @@ function syncAllLabels() {
   }
 
   // Step 3: Find Gmail labels not in the spreadsheet
-  const response = Gmail.Users.Labels.list('me');
+  const response = Gmail.Users.Labels.list("me");
   if (response && response.labels) {
     for (const label of response.labels) {
       // Skip system labels (they start with "CATEGORY_" or have reserved names)
-      if (label.type === 'system' ||
-        label.name.startsWith('CATEGORY_') ||
-        ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM'].includes(label.name)) {
+      if (
+        label.type === "system" ||
+        label.name.startsWith("CATEGORY_") ||
+        ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM"].includes(label.name)
+      ) {
         continue;
       }
 
@@ -109,11 +111,16 @@ function syncAllLabels() {
   }
 
   // If not called from auto sync, show a general toast
-  if (!getAutoSyncEnabled() || !ScriptApp.getProjectTriggers().some(trigger => 
-      trigger.getEventType() === ScriptApp.EventType.ON_OPEN && 
-      trigger.getHandlerFunction() === 'onOpenWithFullPermissions')) {
-    SpreadsheetApp.getActive().toast('All labels synced between Spreadsheet and Gmail.');
+  if (
+    !getAutoSyncEnabled() ||
+    !ScriptApp.getProjectTriggers().some(
+      (trigger) =>
+        trigger.getEventType() === ScriptApp.EventType.ON_OPEN &&
+        trigger.getHandlerFunction() === "onOpenWithFullPermissions"
+    )
+  ) {
+    SpreadsheetApp.getActive().toast("All labels synced between Spreadsheet and Gmail.");
   }
-  
+
   return results;
 }

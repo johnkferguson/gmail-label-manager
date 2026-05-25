@@ -12,13 +12,13 @@ function createInstallableTrigger() {
     // Remove any existing triggers for the same function first
     const triggers = ScriptApp.getProjectTriggers();
     for (const trigger of triggers) {
-      if (trigger.getHandlerFunction() === 'onOpenWithFullPermissions') {
+      if (trigger.getHandlerFunction() === "onOpenWithFullPermissions") {
         ScriptApp.deleteTrigger(trigger);
       }
     }
 
     // Create a new installable trigger
-    ScriptApp.newTrigger('onOpenWithFullPermissions')
+    ScriptApp.newTrigger("onOpenWithFullPermissions")
       .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
       .onOpen()
       .create();
@@ -49,13 +49,13 @@ function toggleEditTrigger() {
 
   // If trigger didn't exist, create it
   if (!triggerExists) {
-    ScriptApp.newTrigger('onEditTrigger')
+    ScriptApp.newTrigger("onEditTrigger")
       .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
       .onEdit()
       .create();
-    SpreadsheetApp.getActive().toast('Row change trigger enabled');
+    SpreadsheetApp.getActive().toast("Row change trigger enabled");
   } else {
-    SpreadsheetApp.getActive().toast('Row change trigger disabled');
+    SpreadsheetApp.getActive().toast("Row change trigger disabled");
   }
 
   // Refresh the menu
@@ -99,7 +99,7 @@ function onEditTrigger(e) {
  * @return {boolean} Whether auto sync is enabled
  */
 function getAutoSyncEnabled() {
-  return PropertiesService.getUserProperties().getProperty('autoSyncEnabled') === 'true';
+  return PropertiesService.getUserProperties().getProperty("autoSyncEnabled") === "true";
 }
 
 /**
@@ -107,7 +107,7 @@ function getAutoSyncEnabled() {
  */
 function toggleAutoSync() {
   const enabled = !getAutoSyncEnabled();
-  PropertiesService.getUserProperties().setProperty('autoSyncEnabled', enabled.toString());
-  SpreadsheetApp.getActive().toast(`Auto Sync ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  PropertiesService.getUserProperties().setProperty("autoSyncEnabled", enabled.toString());
+  SpreadsheetApp.getActive().toast(`Auto Sync ${enabled ? "ENABLED" : "DISABLED"}`);
   onOpenWithFullPermissions(); // Refresh menu
 }
