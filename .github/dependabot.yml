@@ -1,11 +1,19 @@
-# Security updates only: open-pull-requests-limit 0 turns off routine version
-# updates, while security updates still open and take the settings below.
+# Monthly version updates, one grouped PR per ecosystem, with a 7-day cooldown.
+# Security updates come from the repo setting, not this file.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 0
+      interval: "monthly"
+    open-pull-requests-limit: 5
     assignees:
       - "johnkferguson"
+    commit-message:
+      prefix: "chore(ci)"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
