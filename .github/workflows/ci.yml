@@ -10,9 +10,9 @@ jobs:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: latest
 
@@ -27,3 +27,20 @@ jobs:
 
       - name: Test (vitest)
         run: bun run test
+
+  actions-lock:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+      # Fails when actions.lock disagrees with the workflows or a locked commit
+      # no longer verifies upstream. Keep the pin below in step with CLAUDE.md.
+      - name: Verify actions.lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.4.1
+          gh actions-lock --verify
