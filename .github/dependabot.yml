@@ -1,0 +1,11 @@
+# Security updates only: open-pull-requests-limit 0 turns off routine version
+# updates, while security updates still open and take the settings below.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    assignees:
+      - "johnkferguson"
