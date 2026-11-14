@@ -10,7 +10,7 @@ updates:
     assignees:
       - "johnkferguson"
     commit-message:
-      prefix: "chore(ci)"
+      prefix: "chore(deps)"
     cooldown:
       default-days: 7
     groups:
